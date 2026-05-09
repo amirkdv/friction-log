@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# fl — friction log entrypoint. Bash because we must mutate the parent shell
-# (env vars, PS1, exec script(1)). Everything else is delegated to python -m fl.
+# fl — friction log entrypoint. Bash for portable env/exec/script(1) wiring;
+# the recorded session itself runs the user's $SHELL. Everything else is
+# delegated to python -m fl.
 
 set -e
 
