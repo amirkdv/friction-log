@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Fake $EDITOR. Writes contents of $FL_TEST_EDITOR_BODY into $1 and exits 0.
+# If FL_TEST_EDITOR_BODY is unset, leaves the file empty (simulates :q without saving).
+set -e
+target="$1"
+printf '%s' "${FL_TEST_EDITOR_BODY-}" > "$target"

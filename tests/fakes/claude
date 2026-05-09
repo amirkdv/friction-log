@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Fake `claude` CLI for hermetic tests. Reads merged transcript on stdin,
+# emits a deterministic envelope so we can assert fl wired up the call.
+set -e
+
+prompt=""
+if [ "${1:-}" = "-p" ]; then
+  prompt="${2:-}"
+fi
+
+# Count and discard stdin.
+stdin_bytes=$(wc -c | tr -d ' ')
+
+printf 'FAKE-CLAUDE-OUTPUT\n'
+printf 'prompt-bytes: %d\n' "${#prompt}"
+printf 'stdin-bytes: %d\n' "$stdin_bytes"

@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# fl — friction log entrypoint. Bash because we must mutate the parent shell
+# (env vars, PS1, exec script(1)). Everything else is delegated to python -m fl.
+
+set -e
+
+# Resolve repo root from this script's location (follow symlinks).
+_self="${BASH_SOURCE[0]}"
+while [ -L "$_self" ]; do
+  _dir="$(cd -P "$(dirname "$_self")" && pwd)"
+  _self="$(readlink "$_self")"
+  [[ "$_self" != /* ]] && _self="$_dir/$_self"
+done
+FL_REPO="$(cd -P "$(dirname "$_self")/.." && pwd)"
+
+_py() {
+  # Run the python package via uv (isolates deps), falling back to system python.
+  if command -v uv >/dev/null 2>&1; then
+    (cd "$FL_REPO" && uv run --quiet python -m fl "$@")
+  else
+    PYTHONPATH="$FL_REPO/src" python3 -m fl "$@"
+  fi
+}
+
+if [ $# -eq 0 ]; then
+  # Bare `fl`: start (or report) a recording session.
+  if [ -n "${FL_SESSION:-}" ]; then
+    _py _already-recording
+    exit 0
+  fi
+
+  FL_ID="$(_py _new-id)"
+  FL_LOG="$HOME/.friction-log/${FL_ID}.log"
+  FL_TIMING="$HOME/.friction-log/${FL_ID}.timing"
+
+  export FL_ID
+  export FL_SESSION="$FL_LOG"
+
+  # Prepend a yellow [REC <short-id>] to whatever PS1 the user already has.
+  # Yellow (ANSI 33) reads on both light and dark backgrounds.
+  export PS1="\[\033[33m\][REC ${FL_ID#fl-}]\[\033[0m\] ${PS1}"
+
+  _py _print-started "$FL_ID"
+
+  # script(1) flag handling: BSD (macOS) vs GNU (linux).
+  # BSD `script -t N` is a flush-interval, not a timing file, so we omit it on macOS.
+  if [ "$(uname)" = "Darwin" ]; then
+    exec script -q "$FL_LOG"
+  else
+    exec script -q -t "$FL_TIMING" "$FL_LOG"
+  fi
+fi
+
+# All other subcommands: delegate.
+_py "$@"
