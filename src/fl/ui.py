@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime
+from pathlib import Path
 
+import questionary
 from rich.console import Console
+
+from . import storage
 
 _stderr = Console(stderr=True, highlight=False)
 _stdout = Console(highlight=False)
@@ -42,3 +47,25 @@ def confirm(prompt: str, default: bool = False) -> bool:
 def status(msg: str):
     """Returns a context manager spinner for slow ops."""
     return _stderr.status(msg)
+
+
+def pick_logs(logs: list[Path], prompt: str) -> list[Path]:
+    """Multi-select picker over log files. Returns selected paths (possibly empty)."""
+    choices = []
+    for p in logs:
+        fl_id = storage.id_from_path(p)
+        started = storage.parse_id(p.name) or datetime.fromtimestamp(p.stat().st_mtime)
+        try:
+            mtime = datetime.fromtimestamp(p.stat().st_mtime)
+            dur = storage.fmt_duration(mtime - started)
+        except OSError:
+            dur = "?"
+        lines = storage.line_count(p)
+        note = storage.first_note(p)
+        title = f"{fl_id[3:]:<22}  {dur:>6}  {lines:>5}L  {note}"
+        choices.append(questionary.Choice(title=title, value=str(p)))
+
+    answer = questionary.checkbox(prompt, choices=choices).ask()
+    if not answer:
+        return []
+    return [Path(s) for s in answer]

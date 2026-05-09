@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import doc, note, session, ui
+from . import archive, doc, note, session, ui
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -13,6 +13,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd")
 
     sub.add_parser("status", help="show recording state and disk usage")
+    sub.add_parser("archive", help="interactively move sessions to ~/.friction-log/archive")
 
     n = sub.add_parser("note", help="append a note to the active session")
     n.add_argument("words", nargs=argparse.REMAINDER, help="note text (omit to open $EDITOR)")
@@ -49,6 +50,12 @@ def main(argv: list[str] | None = None) -> int:
         return session.cmd_print_started(args.fl_id)
     if args.cmd == "status":
         return session.cmd_status()
+    if args.cmd == "archive":
+        try:
+            return archive.cmd_archive()
+        except KeyboardInterrupt:
+            ui.info("· interrupted")
+            return 130
     if args.cmd == "note":
         words = args.words or []
         # argparse REMAINDER may include a leading "--"; drop it.

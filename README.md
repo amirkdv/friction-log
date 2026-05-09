@@ -29,6 +29,7 @@ fl doc --since 2h     # logs from the last 2 hours
 fl doc --all-today    # logs from today
 
 fl status             # show recording state and disk usage
+fl archive            # interactively move sessions to ~/.friction-log/archive/
 ```
 
 Logs live in `~/.friction-log/`, flat. Filenames sort chronologically.

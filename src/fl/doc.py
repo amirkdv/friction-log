@@ -9,8 +9,6 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import questionary
-
 from . import storage, ui
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|[\x00-\x08\x0b\x0c\x0e-\x1f]")
@@ -49,7 +47,7 @@ def cmd_doc(
         ui.info("· nothing selected, aborting")
         return 0
 
-    total_lines = sum(_line_count(p) for p in selected)
+    total_lines = sum(storage.line_count(p) for p in selected)
     ui.info(
         f"→ will merge {len(selected)} log(s) ({total_lines} lines total) "
         f"and send to Claude for summarization."
@@ -102,31 +100,10 @@ def _select_logs(
     if all_today:
         today = datetime.now().date()
         return [p for p in logs if (storage.parse_id(p.name) or datetime.min).date() == today]
-    return _interactive_pick(logs[:PICKER_LIMIT])
-
-
-def _interactive_pick(logs: list[Path]) -> list[Path]:
-    choices = []
-    for p in logs:
-        fl_id = storage.id_from_path(p)
-        started = storage.parse_id(p.name) or datetime.fromtimestamp(p.stat().st_mtime)
-        try:
-            mtime = datetime.fromtimestamp(p.stat().st_mtime)
-            dur = _fmt_duration(mtime - started)
-        except OSError:
-            dur = "?"
-        lines = _line_count(p)
-        first_note = _first_note(p)
-        title = f"{fl_id[3:]:<22}  {dur:>6}  {lines:>5}L  {first_note}"
-        choices.append(questionary.Choice(title=title, value=str(p)))
-
-    answer = questionary.checkbox(
+    return ui.pick_logs(
+        logs[:PICKER_LIMIT],
         "select logs to merge (space to toggle, enter to confirm):",
-        choices=choices,
-    ).ask()
-    if not answer:
-        return []
-    return [Path(s) for s in answer]
+    )
 
 
 def _prompt_name() -> str | None:
@@ -180,35 +157,6 @@ def _call_claude(merged: str) -> str | None:
             ui.error(proc.stderr.strip())
         return None
     return proc.stdout
-
-
-def _line_count(p: Path) -> int:
-    try:
-        with p.open("rb") as f:
-            return sum(1 for _ in f)
-    except OSError:
-        return 0
-
-
-def _first_note(p: Path) -> str:
-    try:
-        with p.open("r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                if line.startswith("### NOTE"):
-                    s = line.rstrip("\n")
-                    return s[:60] + ("…" if len(s) > 60 else "")
-    except OSError:
-        pass
-    return ""
-
-
-def _fmt_duration(td: timedelta) -> str:
-    secs = max(0, int(td.total_seconds()))
-    h, rem = divmod(secs, 3600)
-    m, _ = divmod(rem, 60)
-    if h:
-        return f"{h}h{m:02d}m"
-    return f"{m}m"
 
 
 _DUR_RE = re.compile(r"^\s*(\d+)\s*([smhd])\s*$")

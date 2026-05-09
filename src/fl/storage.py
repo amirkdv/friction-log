@@ -5,10 +5,11 @@ from __future__ import annotations
 import os
 import re
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(os.path.expanduser("~/.friction-log"))
+ARCHIVE = ROOT / "archive"
 
 ID_RE = re.compile(r"^fl-(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})-([0-9a-f]{6})$")
 
@@ -57,7 +58,9 @@ def parse_id(filename: str) -> datetime | None:
 
 
 def list_logs() -> list[Path]:
-    """All fl-*.log files, newest first by filename (which sorts chronologically)."""
+    """All fl-*.log files in ROOT, newest first. Archive subdir is excluded
+    because glob() is non-recursive — that's how archived sessions stay hidden
+    from `fl doc`."""
     if not ROOT.exists():
         return []
     logs = [p for p in ROOT.glob("fl-*.log") if parse_id(p.name)]
@@ -65,5 +68,37 @@ def list_logs() -> list[Path]:
     return logs
 
 
+def session_files(fl_id: str, base: Path = ROOT) -> list[Path]:
+    """All on-disk artifacts for a session (log + timing). Used by archive."""
+    return [p for p in (base / f"{fl_id}.log", base / f"{fl_id}.timing") if p.exists()]
+
+
 def id_from_path(p: Path) -> str:
     return p.name[:-4] if p.name.endswith(".log") else p.name
+
+
+def line_count(p: Path) -> int:
+    try:
+        with p.open("rb") as f:
+            return sum(1 for _ in f)
+    except OSError:
+        return 0
+
+
+def first_note(p: Path, max_chars: int = 60) -> str:
+    try:
+        with p.open("r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if line.startswith("### NOTE"):
+                    s = line.rstrip("\n")
+                    return s[:max_chars] + ("…" if len(s) > max_chars else "")
+    except OSError:
+        pass
+    return ""
+
+
+def fmt_duration(td: timedelta) -> str:
+    secs = max(0, int(td.total_seconds()))
+    h, rem = divmod(secs, 3600)
+    m, _ = divmod(rem, 60)
+    return f"{h}h{m:02d}m" if h else f"{m}m"
