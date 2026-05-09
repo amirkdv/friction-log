@@ -12,7 +12,10 @@ def test_status_reports_active_session(run_fl, friction_dir):
     log = friction_dir / f"{fl_id}.log"
     log.write_text("body\n", encoding="utf-8")
 
-    r = run_fl("status", env_extra={"FL_SESSION": str(log), "FL_ID": fl_id})
+    r = run_fl(
+        "status",
+        env_extra={"FL_SESSION": str(log), "FL_ID": fl_id, "COLUMNS": "500"},
+    )
     assert r.returncode == 0, r.stderr
     out = r.stdout + r.stderr
     assert "▶ recording" in out
