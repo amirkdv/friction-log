@@ -36,18 +36,22 @@ if [ $# -eq 0 ]; then
   export FL_ID
   export FL_SESSION="$FL_LOG"
 
-  # Prepend a yellow [REC <short-id>] to whatever PS1 the user already has.
-  # Yellow (ANSI 33) reads on both light and dark backgrounds.
-  export PS1="\[\033[33m\][REC ${FL_ID#fl-}]\[\033[0m\] ${PS1}"
-
   _py _print-started "$FL_ID"
 
+  # Spawn the user's interactive shell. FL_ID is exported above; the user's
+  # rc file is responsible for prepending [REC ...] to the prompt when it sees
+  # FL_ID set, e.g. in ~/.zshrc:
+  #   [[ -n $FL_ID ]] && PROMPT="%F{yellow}[REC ${FL_ID#fl-}]%f $PROMPT"
+  _user_shell="${SHELL:-/bin/zsh}"
+
   # script(1) flag handling: BSD (macOS) vs GNU (linux).
+  #   BSD form:  script [opts] file [command...]
+  #   GNU form:  script [opts] [-c command] file
   # BSD `script -t N` is a flush-interval, not a timing file, so we omit it on macOS.
   if [ "$(uname)" = "Darwin" ]; then
-    exec script -q "$FL_LOG"
+    exec script -q "$FL_LOG" "$_user_shell" -i
   else
-    exec script -q -t "$FL_TIMING" "$FL_LOG"
+    exec script -q -t "$FL_TIMING" -c "$_user_shell -i" "$FL_LOG"
   fi
 fi
 

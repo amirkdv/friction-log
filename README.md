@@ -9,6 +9,18 @@ git clone <this repo> ~/code/friction-log
 ln -s ~/code/friction-log/bin/fl ~/.local/bin/fl   # or any dir on PATH
 ```
 
+Inside a recording, `fl` exports `FL_ID` and spawns your `$SHELL` interactively, so your normal rc files (`~/.zshrc`, `~/.bashrc`, etc.) run as usual. To get a yellow `[REC <id>]` prompt prefix while recording, add one line to your shell rc:
+
+```zsh
+# ~/.zshrc
+[[ -n $FL_ID ]] && PROMPT="%F{yellow}[REC ${FL_ID#fl-}]%f $PROMPT"
+```
+
+```bash
+# ~/.bashrc
+[[ -n $FL_ID ]] && PS1="\[\033[33m\][REC ${FL_ID#fl-}]\[\033[0m\] $PS1"
+```
+
 Dependencies:
 
 - `script(1)` (preinstalled on macOS and most Linux)
