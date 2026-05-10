@@ -76,6 +76,24 @@ def test_archive_no_sessions(run_fl):
     assert "no sessions" in r.stderr.lower()
 
 
+def test_archive_help_does_not_open_picker(run_fl, seed_session):
+    """`fl archive --help` must print help and exit — never open the
+    interactive picker (which would block on a non-tty subprocess)."""
+    # Seed a session so that, without the help short-circuit, archive
+    # would otherwise try to open the picker and hang.
+    seed_session("2026-05-09-T-12-00-foo", "body\n")
+    r = run_fl("archive", "--help", timeout=5)
+    assert r.returncode == 0
+    assert "usage" in (r.stdout + r.stderr).lower()
+
+
+def test_ls_help_does_not_render_table(run_fl, seed_session):
+    seed_session("2026-05-09-T-12-00-foo", "body\n")
+    r = run_fl("ls", "--help", timeout=5)
+    assert r.returncode == 0
+    assert "usage" in (r.stdout + r.stderr).lower()
+
+
 def test_archive_excludes_archived_from_doc_listing(run_fl, friction_dir, seed_session):
     """An already-archived file under archive/ must not appear in `fl doc`'s
     candidate set. The active candidate `keep` is selectable via -n."""

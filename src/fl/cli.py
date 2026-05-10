@@ -7,14 +7,18 @@ one-keystroke path. Recognized subcommands: note, doc, archive, ls.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 
 from datetime import datetime
 from pathlib import Path
 
-from . import archive, doc, note, storage, ui
+from rich import box
+from rich.table import Table
 
-_KNOWN_CMDS = {"note", "doc", "archive", "ls", "help", "--help", "-h"}
+from . import archive, doc, note, storage, ui, view
+
+_KNOWN_CMDS = {"note", "doc", "archive", "ls", "view", "help", "--help", "-h"}
 
 
 def _cmd_ls() -> int:
@@ -26,14 +30,15 @@ def _cmd_ls() -> int:
         ui.info("· no sessions")
         return 0
 
-    # session-stem → doc Path index across both active and archived docs.
-    doc_for_session: dict[str, Path] = {}
+    # session-stem → [doc Path, ...] across both active and archived docs.
+    # Multiple docs per session arise from regen (`-N` suffix bumps).
+    docs_for_session: dict[str, list[Path]] = {}
     orphan_docs: list[Path] = []
     all_session_stems = {p.stem for p in active} | {p.stem for p in archived}
     for d in (*active_docs, *archived_docs):
         stem = storage.read_doc_session(d)
         if stem and stem in all_session_stems:
-            doc_for_session.setdefault(stem, d)
+            docs_for_session.setdefault(stem, []).append(d)
         else:
             orphan_docs.append(d)
 
@@ -43,63 +48,94 @@ def _cmd_ls() -> int:
         except OSError:
             return "?"
 
-    # Column widths.
-    W_TIME = 16
-    W_LINES = 6
-    W_SESSION = 48
-    W_DOC = 48
-
-    def _row(time: str, lines: str, session: str, doc_name: str, preview: str) -> str:
-        return (
-            f"{time:<{W_TIME}}  {lines:>{W_LINES}}  "
-            f"{session:<{W_SESSION}}  {doc_name:<{W_DOC}}  {preview}"
-        )
-
-    def _session_row(p: Path, dim: bool) -> None:
-        rel = p.relative_to(storage.ROOT)
-        d = doc_for_session.get(p.stem)
-        doc_name = str(d.relative_to(storage.ROOT)) if d is not None else "-"
-        line = _row(
-            _mtime(p),
-            f"{storage.line_count(p)}L",
-            str(rel),
-            doc_name,
-            storage.first_chunk_preview(p),
-        )
-        (ui.dim if dim else ui.plain)(line)
+    if active or archived or orphan_docs:
+        ui.info(f"· paths relative to {storage.ROOT}/")
 
     if active or archived:
-        header = _row("MTIME", "LINES", "SESSION", "DOC", "PREVIEW")
-        ui.plain(header)
-        ui.plain("-" * len(header.rstrip()))
-        for p in active:
-            _session_row(p, dim=False)
-        for p in archived:
-            _session_row(p, dim=True)
+        ui.table(_build_session_table(active, archived, docs_for_session, _mtime))
     else:
         ui.info("· no sessions")
 
     if orphan_docs:
-        if active or archived:
-            ui.plain("")
-        ui.plain("orphan docs (no matching session):")
-        for d in orphan_docs:
-            rel = d.relative_to(storage.ROOT)
-            fmt = ui.dim if d.parent == storage.ARCHIVE else ui.plain
-            fmt(_row(
-                _mtime(d),
-                f"{storage.line_count(d)}L",
-                "-",
-                str(rel),
-                "",
-            ))
+        ui.table(_build_orphan_table(orphan_docs, _mtime))
     return 0
+
+
+def _build_session_table(
+    active: list[Path],
+    archived: list[Path],
+    docs_for_session: dict[str, list[Path]],
+    mtime_fn,
+) -> Table:
+    t = Table(show_lines=False, box=box.SQUARE)
+    t.add_column("shortname", overflow="fold")
+    t.add_column("lines", justify="right", no_wrap=True)
+    t.add_column("session", overflow="fold")
+    t.add_column("doc", overflow="fold")
+    t.add_column("mtime", no_wrap=True)
+
+    def _add(p: Path, dim: bool) -> None:
+        rel = p.relative_to(storage.ROOT)
+        docs = docs_for_session.get(p.stem, [])
+        if docs:
+            doc_cell = "\n".join(str(d.relative_to(storage.ROOT)) for d in docs)
+        else:
+            doc_cell = "-"
+        t.add_row(
+            storage.session_suffix(p.stem),
+            f"{storage.line_count(p)}L",
+            str(rel),
+            doc_cell,
+            mtime_fn(p),
+            style="bright_black" if dim else None,
+        )
+
+    for p in active:
+        _add(p, dim=False)
+    for p in archived:
+        _add(p, dim=True)
+    return t
+
+
+def _build_orphan_table(orphans: list[Path], mtime_fn) -> Table:
+    t = Table(show_lines=False, box=box.SQUARE,
+              title="orphan docs (no matching session)",
+              title_justify="left", title_style="")
+    t.add_column("shortname", overflow="fold")
+    t.add_column("lines", justify="right", no_wrap=True)
+    t.add_column("doc", overflow="fold")
+    t.add_column("mtime", no_wrap=True)
+    for d in orphans:
+        rel = d.relative_to(storage.ROOT)
+        dim = d.parent == storage.ARCHIVE
+        # Drop both the fl-doc- prefix and the TS-prefix so the shortname
+        # is just the user-supplied tail.
+        shortname = d.stem
+        if shortname.startswith(storage.DOC_PREFIX):
+            shortname = shortname[len(storage.DOC_PREFIX):]
+        shortname = re.sub(r"^\d{4}-\d{2}-\d{2}-T-\d{2}-\d{2}-", "", shortname)
+        t.add_row(
+            shortname,
+            f"{storage.line_count(d)}L",
+            str(rel),
+            mtime_fn(d),
+            style="bright_black" if dim else None,
+        )
+    return t
 
 
 def _doc_parser() -> argparse.ArgumentParser:
     d = argparse.ArgumentParser(prog="fl doc", add_help=True)
     d.add_argument("-n", "--name", dest="name", metavar="TERM",
                    help="session whose name matches TERM (same fuzzy rules as `fl note -n`)")
+    return d
+
+
+def _view_parser() -> argparse.ArgumentParser:
+    d = argparse.ArgumentParser(prog="fl view", add_help=True)
+    d.add_argument("-n", "--name", dest="name", metavar="TERM",
+                   help="open the session or doc matching TERM in $EDITOR "
+                        "(same fuzzy rules as `fl note -n`)")
     return d
 
 
@@ -112,6 +148,7 @@ def _print_help() -> None:
         "  fl note [-n NAME] [text...] same as bare fl\n"
         "  fl ls                       list all sessions and their docs\n"
         "  fl doc [-n NAME]            pick a session and summarize via Claude\n"
+        "  fl view [-n NAME]           open a session or doc in $EDITOR\n"
         "  fl archive                  interactively archive sessions\n"
         "\n"
         "session names may be partial substrings of an existing session's\n"
@@ -136,9 +173,18 @@ def main(argv: list[str] | None = None) -> int:
         return note.cmd_note(rest)
 
     if cmd == "ls":
+        argparse.ArgumentParser(
+            prog="fl ls",
+            description="list all sessions and their docs (active + archived).",
+        ).parse_args(rest)
         return _cmd_ls()
 
     if cmd == "archive":
+        argparse.ArgumentParser(
+            prog="fl archive",
+            description="interactively move sessions (and their docs) to "
+                        "~/.friction-log/archive/.",
+        ).parse_args(rest)
         try:
             return archive.cmd_archive()
         except KeyboardInterrupt:
@@ -149,6 +195,14 @@ def main(argv: list[str] | None = None) -> int:
         ns = _doc_parser().parse_args(rest)
         try:
             return doc.cmd_doc(name=ns.name)
+        except KeyboardInterrupt:
+            ui.info("· interrupted")
+            return 130
+
+    if cmd == "view":
+        ns = _view_parser().parse_args(rest)
+        try:
+            return view.cmd_view(name=ns.name)
         except KeyboardInterrupt:
             ui.info("· interrupted")
             return 130

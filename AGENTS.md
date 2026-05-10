@@ -129,6 +129,7 @@ fl ls                             # list sessions; one row per session, with
                                   # any associated doc in its own column
 fl doc                            # pick a session, summarize → fl-doc-<...>.md
 fl doc -n auth                    # session matching "auth" (picker if 2+)
+fl view -n auth                   # open a session or doc in $EDITOR
 
 fl archive                        # interactively move sessions to archive/
 ```

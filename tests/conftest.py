@@ -41,6 +41,9 @@ def fl_env(fl_home: Path) -> dict[str, str]:
         "SHELL": "/bin/bash",
         "TERM": "dumb",
         "LANG": "C.UTF-8",
+        # Wide console so rich-rendered tables in `fl ls` don't wrap session
+        # or doc filenames across multiple lines (tests grep by full stem).
+        "COLUMNS": "300",
         "UV_CACHE_DIR": str(fl_home / ".uv-cache"),
     }
 

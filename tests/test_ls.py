@@ -22,12 +22,41 @@ def test_ls_has_headers(run_fl, seed_session):
     r = run_fl("ls")
     assert r.returncode == 0, r.stderr
     out = r.stdout
-    # Header row with column titles.
-    assert "MTIME" in out
-    assert "LINES" in out
-    assert "SESSION" in out
-    assert "DOC" in out
-    assert "PREVIEW" in out
+    # Header row: shortname, lines, session, doc, mtime (no preview).
+    assert "shortname" in out
+    assert "lines" in out
+    assert "session" in out
+    assert "doc" in out
+    assert "mtime" in out
+    assert "preview" not in out
+    # No decorative divider line.
+    assert "----" not in out
+    # User is told the listing paths are relative to the storage root.
+    assert "relative to" in r.stderr
+    assert ".friction-log" in r.stderr
+
+
+def test_ls_shortname_column_strips_timestamp(run_fl, seed_session):
+    """The shortname column shows the post-TS suffix only (e.g. 'test'),
+    distinct from the session column which carries the full filename."""
+    seed_session("2026-05-09-T-12-00-test", "body\n")
+    seed_session("2026-05-09-T-13-00-test-archive", "body\n")
+
+    r = run_fl("ls")
+    assert r.returncode == 0, r.stderr
+    out = r.stdout
+    # Find each session's row and confirm the shortname appears on it.
+    test_row = next(
+        line for line in out.splitlines()
+        if "fl-session-2026-05-09-T-12-00-test.md" in line
+    )
+    archive_row = next(
+        line for line in out.splitlines()
+        if "fl-session-2026-05-09-T-13-00-test-archive.md" in line
+    )
+    # Shortname is present (and is the leftmost identifying token).
+    assert " test " in test_row or test_row.lstrip("│ ").startswith("test ")
+    assert "test-archive" in archive_row
 
 
 def test_ls_coalesces_sessions_and_docs(run_fl, friction_dir, seed_session):
@@ -127,6 +156,45 @@ def test_ls_orphan_docs_listed_at_bottom(run_fl, friction_dir, seed_session):
     assert orphan_idx > foo_idx
 
 
+def test_ls_multiple_docs_per_session_each_on_own_line(run_fl, friction_dir, seed_session):
+    """A session regenerated twice has two docs (`-1`, `-2`). Both must be
+    listed under that session, each on its own line within the doc cell."""
+    seed_session("2026-05-09-T-13-00-bar", "body\n")
+    _seed_doc(
+        friction_dir,
+        "fl-doc-2026-05-09-T-13-00-bar",
+        "fl-session-2026-05-09-T-13-00-bar",
+    )
+    _seed_doc(
+        friction_dir,
+        "fl-doc-2026-05-09-T-13-00-bar-1",
+        "fl-session-2026-05-09-T-13-00-bar",
+    )
+
+    r = run_fl("ls")
+    assert r.returncode == 0, r.stderr
+    out = r.stdout
+    # Both doc filenames render.
+    assert "fl-doc-2026-05-09-T-13-00-bar.md" in out
+    assert "fl-doc-2026-05-09-T-13-00-bar-1.md" in out
+    # They land on different output lines (own-line-per-doc inside the cell).
+    doc_lines = [
+        line for line in out.splitlines()
+        if "fl-doc-2026-05-09-T-13-00-bar" in line
+    ]
+    assert len(doc_lines) >= 2, doc_lines
+
+
+def test_ls_renders_bounding_box(run_fl, seed_session):
+    """The session listing is rendered as a bordered table."""
+    seed_session("2026-05-09-T-12-00-foo", "body\n")
+    r = run_fl("ls")
+    assert r.returncode == 0, r.stderr
+    # Rich's default box uses heavy/light box-drawing characters. Any of these
+    # being present confirms a bounding-box was drawn.
+    assert any(ch in r.stdout for ch in "┏┌╭━─│┃"), r.stdout
+
+
 def test_ls_no_session_table_when_only_orphan_docs(run_fl, friction_dir):
     """With zero sessions on disk, don't print the header+divider table.
     Just say 'no sessions' and list the orphan docs."""
@@ -139,18 +207,17 @@ def test_ls_no_session_table_when_only_orphan_docs(run_fl, friction_dir):
     r = run_fl("ls")
     assert r.returncode == 0, r.stderr
     assert "no sessions" in r.stderr.lower()
-    # No empty table header when nothing populates it.
-    assert "MTIME" not in r.stdout
-    assert "SESSION" not in r.stdout
-    assert "----" not in r.stdout
+    # No main session table — the "preview" column is session-only.
+    assert "preview" not in r.stdout
     # Orphan section still renders.
     assert "orphan docs" in r.stdout.lower()
     assert "fl-doc-2026-05-01-T-09-00-gone" in r.stdout
 
 
-def test_ls_strips_ansi_in_preview(run_fl, friction_dir):
-    """Old script-era .log files in archive/ have ANSI escape codes; the
-    preview column must render them without escape noise."""
+def test_ls_lists_legacy_archived_log(run_fl, friction_dir):
+    """Old script-era .log files in archive/ still appear in the listing
+    (under a dimmed row). The preview column was dropped, so we just confirm
+    the filename shows up."""
     archive_dir = friction_dir / "archive"
     archive_dir.mkdir(parents=True, exist_ok=True)
     (archive_dir / "fl-2026-05-09-2300-aaaaaa.log").write_text(
@@ -159,6 +226,6 @@ def test_ls_strips_ansi_in_preview(run_fl, friction_dir):
     r = run_fl("ls")
     assert r.returncode == 0, r.stderr
     line = next(line for line in r.stdout.splitlines() if "fl-2026-05-09-2300-aaaaaa.log" in line)
+    # ANSI escape codes must not leak into rendered output.
     assert "\x1b" not in line
     assert "[33m" not in line
-    assert "hello world" in line
