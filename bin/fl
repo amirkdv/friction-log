@@ -41,8 +41,11 @@ if [ $# -eq 0 ]; then
 
   # Spawn the user's interactive shell. FL_ID is exported above; the user's
   # rc file is responsible for prepending [REC ...] to the prompt when it sees
-  # FL_ID set, e.g. in ~/.zshrc:
-  #   [[ -n $FL_ID ]] && PROMPT="%F{yellow}[REC ${FL_ID#fl-}]%f $PROMPT"
+  # FL_ID set. Examples:
+  #   ~/.zshrc:
+  #     [[ -n $FL_ID ]] && PROMPT="%F{yellow}[REC ${FL_ID#fl-}]%f $PROMPT"
+  #   ~/.bash_profile (place AFTER anything else that sets PS1):
+  #     [[ -n $FL_ID ]] && PS1="\[\e[33m\][REC ${FL_ID#fl-}]\[\e[0m\] $PS1"
   _user_shell="${SHELL:-/bin/zsh}"
 
   # script(1) flag handling: BSD (macOS) vs GNU (linux).

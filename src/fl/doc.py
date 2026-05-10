@@ -23,6 +23,9 @@ prefixed with `## fl-<id>`. Inline `### NOTE` lines are human annotations.
 For each thing that fought me: symptom, what I tried, what worked, rough
 time spent. Group by theme, not by transcript. Skip routine successful
 commands. Be terse.
+
+Always include exact commands I ran and a redacted subset of outputs
+that highlight what happened.
 """
 
 
