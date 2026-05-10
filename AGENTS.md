@@ -1,0 +1,134 @@
+# `fl` — friction log
+
+Paste terminal output (and short notes) into named sessions, then turn a batch
+into a Claude-summarized doc.
+
+The flow is built around manual paste: when something is fighting you in your
+terminal, select the relevant chunk, run `pbpaste | fl` (or pipe directly).
+Later, `fl doc` merges sessions and asks Claude to extract a friction summary.
+
+## Running tests
+
+From the repo root:
+
+```sh
+uv run pytest
+```
+
+That's it — no env vars, no services, no network. The suite is hermetic:
+each test gets a throwaway `$HOME`, a `PATH` that pins the in-repo `bin/fl`
+wrapper and the fake `claude` from `tests/fakes/`, and runs `fl` as a real
+subprocess.
+
+Useful variants:
+
+```sh
+uv run pytest -k note            # filter by name
+uv run pytest tests/test_doc.py  # one file
+uv run pytest -x -vv             # stop on first failure, verbose
+```
+
+If `uv` isn't installed: `pip install -e '.[dev]'` then `pytest`.
+
+## Repo layout
+
+```
+bin/fl              # bash wrapper — entry point, dispatches to python via uv
+src/fl/             # python package
+  cli.py            # argparse + command routing
+  note.py           # `fl` / `fl -n` — append to a session
+  doc.py            # `fl doc` — merge sessions, call `claude` for summary
+  archive.py        # `fl archive`
+  storage.py        # ~/.friction-log layout, session filename conventions
+  ui.py             # questionary pickers, rich output
+tests/
+  conftest.py       # fl_env / run_fl / seed_session fixtures (hermetic)
+  fakes/            # fake `claude` binary on PATH during tests
+  test_*.py         # one file per command group
+spec/               # design notes
+pyproject.toml
+```
+
+## Test conventions
+
+- Tests invoke `fl` as a subprocess via the `run_fl` fixture — no in-process
+  imports of `fl.cli`. This keeps argparse, the bash dispatcher, and env
+  handling under test.
+- External tools (`claude`) are faked by shimming `tests/fakes/` onto `PATH`.
+- New feature → add a `test_<feature>.py` and reuse `run_fl` + `seed_session`.
+- Bug fix → write the failing test first, confirm it fails for the right
+  reason, then fix.
+
+## Install (end-user)
+
+```sh
+git clone <this repo> ~/code/friction-log
+ln -s ~/code/friction-log/bin/fl ~/.local/bin/fl   # any dir on PATH
+```
+
+Dependencies:
+
+- [`uv`](https://github.com/astral-sh/uv) (recommended) — `bin/fl` uses it to
+  run the Python side in an isolated env. Falls back to `python3` +
+  `PYTHONPATH` if `uv` is missing.
+- [Claude Code](https://claude.com/claude-code) CLI on `$PATH` for `fl doc`.
+
+### Recommended: timestamped PS1
+
+`fl` itself doesn't touch your prompt. But if your PS1 carries a wall-clock
+timestamp, `fl doc` can use those embedded timestamps to anchor commands
+inside a paste. Suggested rc snippet:
+
+```zsh
+# ~/.zshrc
+PROMPT='%F{8}%D{%Y-%m-%d %H:%M}%f '$PROMPT
+```
+
+```bash
+# ~/.bashrc
+PS1='\D{%Y-%m-%d %H:%M} '"$PS1"
+```
+
+## Usage
+
+```sh
+pbpaste | fl -n auth-bug          # append the clipboard to session "auth-bug"
+fl -n auth-bug "rate-limited again"  # one-line note via args
+echo "$output" | fl -n auth-bug   # pipe arbitrary command output
+fl -n auth-bug                    # interactive: opens $EDITOR
+fl                                # picker: pick or create a session
+
+fl ls                             # list sessions, newest first
+fl doc                            # pick sessions, summarize → fl-doc-<name>.md
+fl doc --last 3                   # newest 3 sessions
+fl doc --since 2h                 # sessions modified in the last 2 hours
+fl doc -n auth                    # all sessions matching "auth"
+fl doc --all-today                # everything modified today
+
+fl archive                        # interactively move sessions to archive/
+```
+
+`-n <term>` matches sessions by **case-insensitive, dash-token-aware
+substring** of the post-timestamp suffix. So `-n auth-bug` happily targets
+an existing `2026-05-10-T-14-32-authn-bug-fix`. Zero matches → a new session
+is created (or confirmed in interactive mode). Multiple matches → a picker
+filtered to those (or an error if you're piping).
+
+## Storage
+
+```
+~/.friction-log/
+  2026-05-10-T-14-32-auth-bug.md     # one file per session, append-only
+  2026-05-10-T-15-00-deploy-flake.md
+  fl-doc-friday-incidents.md         # outputs of `fl doc`
+  archive/                           # archived sessions live here
+```
+
+Each `fl note` invocation appends a chunk preceded by
+
+```
+--- 2026-05-10 14:32:07 ---
+```
+
+The timestamp is text only — `fl` itself never re-parses it. It exists for
+the LLM in `fl doc`.

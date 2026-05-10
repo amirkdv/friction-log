@@ -1,7 +1,7 @@
 [project]
 name = "fl"
 version = "0.1.0"
-description = "friction log: record terminal sessions, annotate, summarize via Claude Code"
+description = "friction log: paste terminal output into named sessions, summarize via Claude Code"
 requires-python = ">=3.10"
 dependencies = [
     "rich>=13.0",
@@ -26,6 +26,3 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
-markers = [
-    "needs_script: requires a working script(1) on PATH",
-]

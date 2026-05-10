@@ -1,134 +1,211 @@
 """End-to-end tests for `fl doc`. Hermetic: real argparse + real subprocess
 chain, but the `claude` CLI is faked via PATH (see tests/fakes/claude)."""
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
 
 
-def test_doc_writes_file_with_fake_claude(run_fl, friction_dir, seed_log):
-    seed_log(
-        "fl-2026-05-09-1200-111111",
-        "$ echo one\none\n### NOTE [12:01:00]: thing one\n",
-    )
-    seed_log(
-        "fl-2026-05-09-1300-222222",
-        "$ echo two\ntwo\n",
-    )
+def test_doc_writes_file_with_fake_claude(run_fl, friction_dir, seed_session):
+    seed_session("2026-05-09-T-12-00-foo", "--- 2026-05-09 12:01:00 ---\nthing one\n")
+    seed_session("2026-05-09-T-13-00-bar", "--- 2026-05-09 13:00:00 ---\nthing two\n")
 
-    r = run_fl(
-        "doc",
-        "--last",
-        "2",
-        stdin="my-merge\ny\n",
-    )
+    r = run_fl("doc", "--last", "2")
     assert r.returncode == 0, f"stdout={r.stdout!r} stderr={r.stderr!r}"
 
-    out = friction_dir / "fl-doc-my-merge.md"
+    # Doc name is derived from the most-recent session's suffix (`bar`),
+    # auto-incremented from -0.
+    out = friction_dir / "fl-doc-bar-0.md"
     assert out.exists(), list(friction_dir.iterdir())
     body = out.read_text(encoding="utf-8")
     assert "FAKE-CLAUDE-OUTPUT" in body
-    # The fake echoes prompt and stdin byte counts. Both must be > 0,
-    # proving fl actually piped the merged transcript through.
+    # Frontmatter records both source sessions.
+    assert "sessions:" in body
+    assert "2026-05-09-T-12-00-foo" in body
+    assert "2026-05-09-T-13-00-bar" in body
     assert "prompt-bytes:" in body
     assert "stdin-bytes:" in body
     stdin_bytes = int(
         next(line for line in body.splitlines() if line.startswith("stdin-bytes:"))
-        .split(":", 1)[1]
-        .strip()
+        .split(":", 1)[1].strip()
     )
     prompt_bytes = int(
         next(line for line in body.splitlines() if line.startswith("prompt-bytes:"))
-        .split(":", 1)[1]
-        .strip()
+        .split(":", 1)[1].strip()
     )
     assert stdin_bytes > 0
     assert prompt_bytes > 0
 
 
-def test_doc_no_logs_errors(run_fl, friction_dir):
+def test_doc_no_sessions_errors(run_fl, friction_dir):
     friction_dir.mkdir(parents=True, exist_ok=True)
     r = run_fl("doc", "--last", "5")
     assert r.returncode == 1
-    assert "no logs" in r.stderr.lower()
+    assert "no sessions" in r.stderr.lower()
 
 
-def test_doc_missing_claude_errors_cleanly(run_fl, friction_dir, seed_log, fl_env, tmp_path):
-    seed_log("fl-2026-05-09-1200-111111", "body\n")
+def test_doc_missing_claude_errors_cleanly(run_fl, friction_dir, seed_session, fl_env):
+    seed_session("2026-05-09-T-12-00-foo", "body\n")
 
-    # Drop the fakes dir from PATH so `claude` is not resolvable.
     base_path = os.environ.get("PATH", "")
-    # Filter out anything that looks like our fakes dir, AND anywhere the host's
-    # real `claude` might live (we want this test to fail to find it).
     minimal = ":".join(p for p in base_path.split(":") if "fakes" not in p)
     r = run_fl(
-        "doc",
-        "--last",
-        "1",
+        "doc", "--last", "1",
         env_extra={"PATH": f"{Path(__file__).resolve().parent.parent / 'bin'}:{minimal}"},
     )
-    # If a real `claude` is on the user's PATH this may succeed; in CI / hermetic
-    # runs it should not be. Assert error path when claude is absent.
-    # We accept either: rc=1 with "claude" message OR rc=0 (real claude available).
     if r.returncode == 1:
         assert "claude" in r.stderr.lower()
 
 
-def test_doc_overwrite_declined_leaves_file(run_fl, friction_dir, seed_log):
-    seed_log("fl-2026-05-09-1200-111111", "body\n")
+def test_doc_name_auto_increments(run_fl, friction_dir, seed_session):
+    """Regenerating a doc for the same session bumps the -N suffix instead of
+    clobbering the previous output. Also: an archived doc's name is reserved."""
+    seed_session("2026-05-09-T-12-00-foo", "body\n")
+    archive_dir = friction_dir / "archive"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    (archive_dir / "fl-doc-foo-0.md").write_text("ARCHIVED-PRIOR", encoding="utf-8")
 
-    friction_dir.mkdir(parents=True, exist_ok=True)
-    existing = friction_dir / "fl-doc-keep.md"
-    existing.write_text("ORIGINAL", encoding="utf-8")
+    r1 = run_fl("doc", "--last", "1")
+    assert r1.returncode == 0, r1.stderr
+    assert (friction_dir / "fl-doc-foo-1.md").exists()
 
-    r = run_fl("doc", "--last", "1", stdin="keep\nn\n")
-    assert r.returncode == 0
-    assert existing.read_text(encoding="utf-8") == "ORIGINAL"
-    assert "aborted" in r.stderr.lower()
+    r2 = run_fl("doc", "--last", "1")
+    assert r2.returncode == 0, r2.stderr
+    assert (friction_dir / "fl-doc-foo-2.md").exists()
 
-
-def test_doc_proceed_declined_writes_nothing(run_fl, friction_dir, seed_log):
-    seed_log("fl-2026-05-09-1200-111111", "body\n")
-    r = run_fl("doc", "--last", "1", stdin="newdoc\nn\n")
-    assert r.returncode == 0
-    assert not (friction_dir / "fl-doc-newdoc.md").exists()
-    assert "aborted" in r.stderr.lower()
+    # Archived prior is untouched.
+    assert (archive_dir / "fl-doc-foo-0.md").read_text() == "ARCHIVED-PRIOR"
 
 
-def test_doc_strips_ansi_before_send(run_fl, friction_dir, seed_log):
-    """Ensure ANSI escape codes captured by script(1) don't reach claude.
+def test_doc_prompt_explains_chunk_delimiter(run_fl, friction_dir, seed_session):
+    """The prompt sent to claude must teach it about the `--- ts ---`
+    delimiter — that's the contract the new format relies on."""
+    seed_session("2026-05-09-T-12-00-foo", "--- 2026-05-09 12:00:00 ---\nbody\n")
 
-    The fake echoes byte counts; we seed two logs of equal raw size — one
-    with ANSI noise, one without — and confirm the cleaned input shrinks.
-    """
-    plain_id = "fl-2026-05-09-1100-aaaaaa"
-    ansi_id = "fl-2026-05-09-1200-bbbbbb"
-    seed_log(plain_id, "hello world\n" * 50)
-    # Same payload but with bracketed ANSI noise sprinkled in.
-    seed_log(ansi_id, "\x1b[31mhello\x1b[0m world\n" * 50)
+    # Replace the fake claude with one that captures the prompt arg verbatim.
+    fakes = Path(__file__).resolve().parent / "fakes"
+    capture = fakes / "claude_capture"
+    captured_path = friction_dir / "_captured_prompt.txt"
+    capture.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [ "$1" = "-p" ]; then printf "%s" "$2" > "' + str(captured_path) + '"; fi\n'
+        'cat >/dev/null\n'
+        'echo OK\n',
+        encoding="utf-8",
+    )
+    capture.chmod(0o755)
+    try:
+        # Put a directory containing only `claude` -> claude_capture, ahead of fakes.
+        shim_dir = friction_dir / "_shim"
+        shim_dir.mkdir(parents=True, exist_ok=True)
+        (shim_dir / "claude").symlink_to(capture)
+        base_path = os.environ.get("PATH", "")
+        new_path = f"{shim_dir}:{base_path}"
+        r = run_fl("doc", "--last", "1", env_extra={"PATH": new_path})
+        assert r.returncode == 0, r.stderr
+        prompt = captured_path.read_text(encoding="utf-8")
+        assert "--- YYYY-MM-DD HH:MM:SS ---" in prompt
+        assert "PS1" in prompt
+    finally:
+        capture.unlink(missing_ok=True)
 
-    # Run twice, once per log, capture stdin-bytes from fake claude output.
-    def stdin_bytes_for(fl_id: str) -> int:
-        # Move the unrelated log out of the way.
-        other = ansi_id if fl_id == plain_id else plain_id
-        other_path = friction_dir / f"{other}.log"
-        hidden = friction_dir / f"_hidden_{other}.log"
-        other_path.rename(hidden)
-        try:
-            r = run_fl("doc", "--last", "1", stdin=f"d-{fl_id[-6:]}\ny\n")
-            assert r.returncode == 0, r.stderr
-            doc = friction_dir / f"fl-doc-d-{fl_id[-6:]}.md"
-            line = next(
-                ln for ln in doc.read_text().splitlines() if ln.startswith("stdin-bytes:")
-            )
-            return int(line.split(":", 1)[1].strip())
-        finally:
-            hidden.rename(other_path)
 
-    plain_bytes = stdin_bytes_for(plain_id)
-    ansi_bytes = stdin_bytes_for(ansi_id)
-    # ANSI version should clean down to roughly the plain size (allow some
-    # slack for the `## <id>` header). Specifically: ansi_bytes must be much
-    # closer to plain_bytes than to its raw on-disk size.
-    raw_ansi_size = (friction_dir / f"{ansi_id}.log").stat().st_size
-    assert ansi_bytes < raw_ansi_size, (ansi_bytes, raw_ansi_size)
-    assert abs(ansi_bytes - plain_bytes) < 50, (plain_bytes, ansi_bytes)
+def test_doc_dash_n_single_match(run_fl, friction_dir, seed_session):
+    seed_session("2026-05-09-T-12-00-foo", "body-foo\n")
+    seed_session("2026-05-09-T-13-00-bar", "body-bar\n")
+    r = run_fl("doc", "-n", "bar")
+    assert r.returncode == 0, r.stderr
+    out = friction_dir / "fl-doc-bar-0.md"
+    assert out.exists()
+    body = out.read_text(encoding="utf-8")
+    # Only `bar` was merged — `foo` not in frontmatter.
+    assert "2026-05-09-T-13-00-bar" in body
+    assert "2026-05-09-T-12-00-foo" not in body
+    # Resolution echo is on stderr.
+    assert "matched 1 session(s) for '-n bar'" in r.stderr
+    assert "2026-05-09-T-13-00-bar" in r.stderr
+
+
+def test_doc_dash_n_multi_match(run_fl, friction_dir, seed_session):
+    seed_session("2026-05-09-T-12-00-auth-bug", "a\n")
+    seed_session("2026-05-09-T-13-00-auth-rewrite", "b\n")
+    seed_session("2026-05-09-T-14-00-unrelated", "c\n")
+    r = run_fl("doc", "-n", "auth")
+    assert r.returncode == 0, r.stderr
+    assert "matched 2 session(s) for '-n auth'" in r.stderr
+    # Doc is auto-named after the most-recent matching session (auth-rewrite).
+    out = friction_dir / "fl-doc-auth-rewrite-0.md"
+    assert out.exists()
+    body = out.read_text(encoding="utf-8")
+    assert "auth-bug" in body
+    assert "auth-rewrite" in body
+    assert "unrelated" not in body
+
+
+def test_doc_dash_n_zero_match(run_fl, seed_session):
+    seed_session("2026-05-09-T-12-00-foo", "body\n")
+    r = run_fl("doc", "-n", "nope")
+    assert r.returncode == 1
+    assert "no sessions match" in r.stderr.lower()
+
+
+def test_doc_no_proceed_prompt_for_new_target(run_fl, friction_dir, seed_session):
+    """Brand-new doc target: no confirmation prompt. Empty stdin → still writes."""
+    seed_session("2026-05-09-T-12-00-foo", "body\n")
+    r = run_fl("doc", "--last", "1", stdin="")
+    assert r.returncode == 0, r.stderr
+    docs = list(friction_dir.glob("fl-doc-*.md"))
+    assert len(docs) == 1, docs
+
+
+def test_doc_prompt_includes_format_directives(run_fl, friction_dir, seed_session):
+    """The prompt must instruct claude on the strict output format (H1 title,
+    no preamble) — these are what stop the docs from rendering as nested
+    fragments inside whatever consumes them."""
+    seed_session("2026-05-09-T-12-00-foo", "--- 2026-05-09 12:00:00 ---\nbody\n")
+    fakes = Path(__file__).resolve().parent / "fakes"
+    capture = fakes / "claude_capture_fmt"
+    captured_path = friction_dir / "_captured_fmt.txt"
+    capture.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [ "$1" = "-p" ]; then printf "%s" "$2" > "' + str(captured_path) + '"; fi\n'
+        'cat >/dev/null\n'
+        'echo OK\n',
+        encoding="utf-8",
+    )
+    capture.chmod(0o755)
+    try:
+        shim_dir = friction_dir / "_shim_fmt"
+        shim_dir.mkdir(parents=True, exist_ok=True)
+        (shim_dir / "claude").symlink_to(capture)
+        base_path = os.environ.get("PATH", "")
+        r = run_fl("doc", "--last", "1",
+                   env_extra={"PATH": f"{shim_dir}:{base_path}"})
+        assert r.returncode == 0, r.stderr
+        prompt = captured_path.read_text(encoding="utf-8")
+        # Strict-format directives present.
+        assert "Start with a single `# `" in prompt
+        assert "Do not preface or postscript" in prompt
+    finally:
+        capture.unlink(missing_ok=True)
+
+
+def test_doc_archived_session_excluded(run_fl, friction_dir, seed_session):
+    seed_session("2026-05-09-T-12-00-keep", "body\n")
+    archive_dir = friction_dir / "archive"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    (archive_dir / "2026-05-08-T-09-00-old.md").write_text("ARCHIVED\n")
+
+    r = run_fl("doc", "--last", "10")
+    assert r.returncode == 0, r.stderr
+    out = friction_dir / "fl-doc-keep-0.md"
+    body = out.read_text(encoding="utf-8")
+    # The archived session must not have been merged in. The fake echoes the
+    # stdin byte count; the keep-only run must be small.
+    stdin_bytes = int(
+        next(line for line in body.splitlines() if line.startswith("stdin-bytes:"))
+        .split(":", 1)[1].strip()
+    )
+    # Just "## <id>\n\nbody\n\n" merged content — well under 100 bytes.
+    assert stdin_bytes < 200
