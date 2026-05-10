@@ -55,9 +55,34 @@ pyproject.toml
   imports of `fl.cli`. This keeps argparse, the bash dispatcher, and env
   handling under test.
 - External tools (`claude`) are faked by shimming `tests/fakes/` onto `PATH`.
-- New feature → add a `test_<feature>.py` and reuse `run_fl` + `seed_session`.
-- Bug fix → write the failing test first, confirm it fails for the right
-  reason, then fix.
+
+## Agent rules (Claude Code, Cursor, etc.)
+
+These rules are mandatory for any AI agent making changes in this repo.
+`CLAUDE.md` and `.cursorrules` are symlinks to this file — edit `AGENTS.md`
+and both pick it up.
+
+1. **New feature → new test.** Every new feature or user-visible behavior
+   must land with a test in `tests/test_<feature>.py` using `run_fl` +
+   `seed_session`. No feature PR without a test.
+
+2. **Bug fix → red/green.** Reproduce the bug with a failing test *first*.
+   Run it, show it fails for the right reason, then make the minimal fix and
+   confirm the suite is green. Do not skip the red step even when the fix
+   looks obvious. If the bug genuinely cannot be expressed as a test (e.g.,
+   a packaging-only issue), say so explicitly.
+
+3. **Editing existing tests requires explicit permission.** Do not modify,
+   rename, delete, or weaken any test in `tests/` without first asking the
+   user and getting an explicit yes. Adding *new* tests is always fine;
+   touching existing assertions, fixtures, or test names is not. If a fix
+   appears to require changing a test, stop and ask — usually it means the
+   fix is wrong.
+
+4. **Keep these instructions in sync.** When a change introduces a new
+   convention, fixture, directory, or workflow that future agents will need
+   to know, update `AGENTS.md` in the same change. Stale agent instructions
+   are a bug; treat them like one.
 
 ## Install (end-user)
 
