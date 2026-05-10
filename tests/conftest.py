@@ -76,10 +76,16 @@ def friction_dir(fl_home: Path) -> Path:
 
 @pytest.fixture
 def seed_session(friction_dir: Path):
-    """Create a session .md with the canonical <TS>-<name> filename."""
+    """Create a session .md with the canonical fl-session-<TS>-<name> filename.
+
+    Accepts either the bare `<TS>-<name>` (auto-prefixed) or a fully-qualified
+    `fl-session-<TS>-<name>` stem.
+    """
 
     def _seed(stem: str, body: str = "") -> Path:
         friction_dir.mkdir(parents=True, exist_ok=True)
+        if not stem.startswith("fl-session-"):
+            stem = f"fl-session-{stem}"
         p = friction_dir / f"{stem}.md"
         p.write_text(body, encoding="utf-8")
         return p

@@ -1,7 +1,7 @@
 """Argparse dispatcher for `python -m fl`.
 
 Bare `fl` (no args) routes to `fl note` so paste-and-go is the default
-one-keystroke path. Recognized subcommands: note, doc, archive.
+one-keystroke path. Recognized subcommands: note, doc, archive, ls.
 """
 
 from __future__ import annotations
@@ -26,56 +26,80 @@ def _cmd_ls() -> int:
         ui.info("· no sessions")
         return 0
 
-    # Build session-stem -> [doc names] index across both active and archived
-    # docs, so each session row can advertise the doc(s) it feeds.
-    session_docs: dict[str, list[str]] = {}
+    # session-stem → doc Path index across both active and archived docs.
+    doc_for_session: dict[str, Path] = {}
+    orphan_docs: list[Path] = []
+    all_session_stems = {p.stem for p in active} | {p.stem for p in archived}
     for d in (*active_docs, *archived_docs):
-        for stem in storage.read_doc_sessions(d):
-            session_docs.setdefault(stem, []).append(d.stem)
+        stem = storage.read_doc_session(d)
+        if stem and stem in all_session_stems:
+            doc_for_session.setdefault(stem, d)
+        else:
+            orphan_docs.append(d)
 
-    def _fmt_session(p: Path) -> str:
+    def _mtime(p: Path) -> str:
         try:
-            mtime = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+            return datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
         except OSError:
-            mtime = "?"
-        lines = storage.line_count(p)
-        rel = p.relative_to(storage.ROOT)
-        preview = storage.first_chunk_preview(p)
-        docs = session_docs.get(p.stem)
-        # Rich parses `[...]` as markup, so use parens for the doc tag.
-        tag = f"  (doc: {', '.join(docs)})" if docs else ""
-        return f"{mtime}  {lines:>5}L  {str(rel):<48}  {preview}{tag}"
+            return "?"
 
-    def _fmt_doc(p: Path) -> str:
-        try:
-            mtime = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-        except OSError:
-            mtime = "?"
-        lines = storage.line_count(p)
-        rel = p.relative_to(storage.ROOT)
-        sources = storage.read_doc_sessions(p)
-        meta = f"{len(sources)} session(s)" if sources else "doc"
-        return f"{mtime}  {lines:>5}L  {str(rel):<48}  {meta}"
+    # Column widths.
+    W_TIME = 16
+    W_LINES = 6
+    W_SESSION = 48
+    W_DOC = 48
 
-    for p in active:
-        ui.plain(_fmt_session(p))
-    for p in active_docs:
-        ui.plain(_fmt_doc(p))
-    for p in archived:
-        ui.dim(_fmt_session(p))
-    for p in archived_docs:
-        ui.dim(_fmt_doc(p))
+    def _row(time: str, lines: str, session: str, doc_name: str, preview: str) -> str:
+        return (
+            f"{time:<{W_TIME}}  {lines:>{W_LINES}}  "
+            f"{session:<{W_SESSION}}  {doc_name:<{W_DOC}}  {preview}"
+        )
+
+    def _session_row(p: Path, dim: bool) -> None:
+        rel = p.relative_to(storage.ROOT)
+        d = doc_for_session.get(p.stem)
+        doc_name = str(d.relative_to(storage.ROOT)) if d is not None else "-"
+        line = _row(
+            _mtime(p),
+            f"{storage.line_count(p)}L",
+            str(rel),
+            doc_name,
+            storage.first_chunk_preview(p),
+        )
+        (ui.dim if dim else ui.plain)(line)
+
+    if active or archived:
+        header = _row("MTIME", "LINES", "SESSION", "DOC", "PREVIEW")
+        ui.plain(header)
+        ui.plain("-" * len(header.rstrip()))
+        for p in active:
+            _session_row(p, dim=False)
+        for p in archived:
+            _session_row(p, dim=True)
+    else:
+        ui.info("· no sessions")
+
+    if orphan_docs:
+        if active or archived:
+            ui.plain("")
+        ui.plain("orphan docs (no matching session):")
+        for d in orphan_docs:
+            rel = d.relative_to(storage.ROOT)
+            fmt = ui.dim if d.parent == storage.ARCHIVE else ui.plain
+            fmt(_row(
+                _mtime(d),
+                f"{storage.line_count(d)}L",
+                "-",
+                str(rel),
+                "",
+            ))
     return 0
 
 
 def _doc_parser() -> argparse.ArgumentParser:
     d = argparse.ArgumentParser(prog="fl doc", add_help=True)
-    g = d.add_mutually_exclusive_group()
-    g.add_argument("--last", type=int, metavar="N", help="use newest N sessions, skip picker")
-    g.add_argument("--since", metavar="DUR", help="sessions newer than DUR (e.g. 2h, 30m, 1d)")
-    g.add_argument("--all-today", action="store_true", help="all sessions modified today")
-    g.add_argument("-n", "--name", dest="name", metavar="TERM",
-                   help="sessions whose name matches TERM (same fuzzy rules as `fl note -n`)")
+    d.add_argument("-n", "--name", dest="name", metavar="TERM",
+                   help="session whose name matches TERM (same fuzzy rules as `fl note -n`)")
     return d
 
 
@@ -86,9 +110,8 @@ def _print_help() -> None:
         "usage:\n"
         "  fl [-n NAME] [text...]      append a note (stdin / args / $EDITOR)\n"
         "  fl note [-n NAME] [text...] same as bare fl\n"
-        "  fl ls                       list all sessions, newest first\n"
-        "  fl doc [--last N|--since DUR|--all-today]\n"
-        "                              merge sessions and summarize via Claude\n"
+        "  fl ls                       list all sessions and their docs\n"
+        "  fl doc [-n NAME]            pick a session and summarize via Claude\n"
         "  fl archive                  interactively archive sessions\n"
         "\n"
         "session names may be partial substrings of an existing session's\n"
@@ -125,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "doc":
         ns = _doc_parser().parse_args(rest)
         try:
-            return doc.cmd_doc(last=ns.last, since=ns.since, all_today=ns.all_today, name=ns.name)
+            return doc.cmd_doc(name=ns.name)
         except KeyboardInterrupt:
             ui.info("· interrupted")
             return 130

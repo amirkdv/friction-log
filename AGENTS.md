@@ -1,11 +1,13 @@
 # `fl` — friction log
 
-Paste terminal output (and short notes) into named sessions, then turn a batch
-into a Claude-summarized doc.
+Paste terminal output (and short notes) into named sessions, then turn a
+session into a Claude-summarized doc.
 
 The flow is built around manual paste: when something is fighting you in your
 terminal, select the relevant chunk, run `pbpaste | fl` (or pipe directly).
-Later, `fl doc` merges sessions and asks Claude to extract a friction summary.
+Later, `fl doc` picks one session and asks Claude to extract a friction
+summary. Each session has at most one corresponding doc; the doc filename
+mirrors the session stem (`fl-doc-<TS>-<suffix>.md`).
 
 ## Running tests
 
@@ -37,7 +39,7 @@ bin/fl              # bash wrapper — entry point, dispatches to python via uv
 src/fl/             # python package
   cli.py            # argparse + command routing
   note.py           # `fl` / `fl -n` — append to a session
-  doc.py            # `fl doc` — merge sessions, call `claude` for summary
+  doc.py            # `fl doc` — pick one session, call `claude` for summary
   archive.py        # `fl archive`
   storage.py        # ~/.friction-log layout, session filename conventions
   ui.py             # questionary pickers, rich output
@@ -123,12 +125,10 @@ echo "$output" | fl -n auth-bug   # pipe arbitrary command output
 fl -n auth-bug                    # interactive: opens $EDITOR
 fl                                # picker: pick or create a session
 
-fl ls                             # list sessions, newest first
-fl doc                            # pick sessions, summarize → fl-doc-<name>.md
-fl doc --last 3                   # newest 3 sessions
-fl doc --since 2h                 # sessions modified in the last 2 hours
-fl doc -n auth                    # all sessions matching "auth"
-fl doc --all-today                # everything modified today
+fl ls                             # list sessions; one row per session, with
+                                  # any associated doc in its own column
+fl doc                            # pick a session, summarize → fl-doc-<...>.md
+fl doc -n auth                    # session matching "auth" (picker if 2+)
 
 fl archive                        # interactively move sessions to archive/
 ```
@@ -143,10 +143,12 @@ filtered to those (or an error if you're piping).
 
 ```
 ~/.friction-log/
-  2026-05-10-T-14-32-auth-bug.md     # one file per session, append-only
-  2026-05-10-T-15-00-deploy-flake.md
-  fl-doc-friday-incidents.md         # outputs of `fl doc`
-  archive/                           # archived sessions live here
+  fl-session-2026-05-10-T-14-32-auth-bug.md     # one file per session
+  fl-session-2026-05-10-T-15-00-deploy-flake.md # append-only
+  fl-doc-2026-05-10-T-14-32-auth-bug.md         # `fl doc` output for that
+                                                # session (mirrors the stem)
+  fl-doc-2026-05-10-T-14-32-auth-bug-1.md       # regenerated → -N suffix
+  archive/                                      # archived sessions + docs
 ```
 
 Each `fl note` invocation appends a chunk preceded by

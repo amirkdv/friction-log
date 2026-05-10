@@ -31,16 +31,23 @@ def fl_root(tmp_path, monkeypatch):
     return root
 
 
-def _make_session(root: Path, stem: str, body: str = "body\n") -> Path:
-    p = root / f"{stem}.md"
+def _session_stem(name: str) -> str:
+    return name if name.startswith("fl-session-") else f"fl-session-{name}"
+
+
+def _make_session(root: Path, name: str, body: str = "body\n") -> Path:
+    p = root / f"{_session_stem(name)}.md"
     p.write_text(body, encoding="utf-8")
     return p
 
 
-def _make_doc(directory: Path, name: str, sessions: list[str]) -> Path:
+def _make_doc(directory: Path, session_stem: str) -> Path:
+    """Doc named to mirror its session, with single-session frontmatter."""
     directory.mkdir(parents=True, exist_ok=True)
-    fm = "---\nsessions:\n" + "".join(f"  - {s}\n" for s in sessions) + "---\n\n"
-    p = directory / f"fl-doc-{name}.md"
+    session_stem = _session_stem(session_stem)
+    doc_stem = "fl-doc-" + session_stem[len("fl-session-"):]
+    fm = f"---\nsession: {session_stem}\n---\n\n"
+    p = directory / f"{doc_stem}.md"
     p.write_text(fm + "BODY\n", encoding="utf-8")
     return p
 
@@ -63,34 +70,23 @@ def _stub_confirm(monkeypatch, value: bool):
     return asked
 
 
-def _seed_doc(friction_dir, name: str, sessions: list[str], body: str = "BODY\n"):
-    friction_dir.mkdir(parents=True, exist_ok=True)
-    fm = "---\nsessions:\n" + "".join(f"  - {s}\n" for s in sessions) + "---\n\n"
-    p = friction_dir / f"fl-doc-{name}.md"
-    p.write_text(fm + body, encoding="utf-8")
-    return p
-
-
 def test_archive_no_sessions(run_fl):
     r = run_fl("archive")
     assert r.returncode == 0
     assert "no sessions" in r.stderr.lower()
 
 
-def test_archive_excludes_archived_from_listing(run_fl, friction_dir, seed_session):
+def test_archive_excludes_archived_from_doc_listing(run_fl, friction_dir, seed_session):
     """An already-archived file under archive/ must not appear in `fl doc`'s
-    candidate set. We assert this here because archive's main contract is
-    that moving a session out of the top-level dir hides it."""
+    candidate set. The active candidate `keep` is selectable via -n."""
     archive_dir = friction_dir / "archive"
     archive_dir.mkdir(parents=True, exist_ok=True)
-    (archive_dir / "2026-05-08-T-09-00-old.md").write_text("old\n")
+    (archive_dir / "fl-session-2026-05-08-T-09-00-old.md").write_text("old\n")
 
     seed_session("2026-05-09-T-12-00-keep", "kept\n")
-    r = run_fl("doc", "--last", "10", stdin="x\nn\n")
-    # `--last 10` will pick everything available; only `keep` should be available.
-    # We just ensure no error and that the merge selection summary mentions 1 session.
-    assert r.returncode == 0
-    assert "1 session" in r.stderr
+    r = run_fl("doc", "-n", "old")
+    assert r.returncode == 1
+    assert "no sessions match" in r.stderr.lower()
 
 
 # --- in-process tests for the post-picker move logic ---
@@ -104,7 +100,6 @@ def test_archive_moves_selected_session(fl_root, monkeypatch):
 
     rc = archive.cmd_archive()
     assert rc == 0
-    # No collision → no confirm prompt asked.
     assert asked == [], asked
     assert not s.exists()
     assert (fl_root / "archive" / s.name).exists()
@@ -113,7 +108,7 @@ def test_archive_moves_selected_session(fl_root, monkeypatch):
 def test_archive_pulls_associated_active_doc(fl_root, monkeypatch):
     from fl import archive
     s = _make_session(fl_root, "2026-05-09-T-12-00-foo")
-    doc = _make_doc(fl_root, "foo-0", ["2026-05-09-T-12-00-foo"])
+    doc = _make_doc(fl_root, "2026-05-09-T-12-00-foo")
     _stub_picker(monkeypatch, [s])
     _stub_confirm(monkeypatch, True)
 
@@ -130,39 +125,37 @@ def test_archive_skips_already_archived_doc(fl_root, monkeypatch):
     for the doc; session still moves."""
     from fl import archive
     s = _make_session(fl_root, "2026-05-09-T-12-00-foo")
-    archived_doc = _make_doc(fl_root / "archive", "foo-0", ["2026-05-09-T-12-00-foo"])
+    archived_doc = _make_doc(fl_root / "archive", "2026-05-09-T-12-00-foo")
     _stub_picker(monkeypatch, [s])
     _stub_confirm(monkeypatch, True)
 
     rc = archive.cmd_archive()
     assert rc == 0
     assert (fl_root / "archive" / s.name).exists()
-    # Pre-archived doc untouched.
     assert archived_doc.exists()
     assert archived_doc.read_text().startswith("---")
 
 
-def test_archive_doc_follows_partial_session_archive(fl_root, monkeypatch):
-    """Doc references two sessions; archive only one → doc is still pulled
-    along (current contract per archive.py docstring)."""
+def test_archive_unrelated_doc_stays(fl_root, monkeypatch):
+    """A doc whose session isn't being archived stays put."""
     from fl import archive
-    s1 = _make_session(fl_root, "2026-05-09-T-12-00-foo")
+    s_foo = _make_session(fl_root, "2026-05-09-T-12-00-foo")
     _make_session(fl_root, "2026-05-09-T-13-00-bar")
-    doc = _make_doc(fl_root, "merged-0",
-                    ["2026-05-09-T-12-00-foo", "2026-05-09-T-13-00-bar"])
-    _stub_picker(monkeypatch, [s1])
+    bar_doc = _make_doc(fl_root, "2026-05-09-T-13-00-bar")
+    _stub_picker(monkeypatch, [s_foo])
     _stub_confirm(monkeypatch, True)
 
     rc = archive.cmd_archive()
     assert rc == 0
-    assert (fl_root / "archive" / doc.name).exists()
-    assert not doc.exists()
+    # foo got archived, bar's doc is untouched.
+    assert (fl_root / "archive" / s_foo.name).exists()
+    assert bar_doc.exists()
+    assert not (fl_root / "archive" / bar_doc.name).exists()
 
 
 def test_archive_collision_prompts_overwrite(fl_root, monkeypatch):
     from fl import archive
     s = _make_session(fl_root, "2026-05-09-T-12-00-foo", body="NEW\n")
-    # Pre-existing archived copy with the same filename.
     (fl_root / "archive").mkdir(parents=True, exist_ok=True)
     (fl_root / "archive" / s.name).write_text("OLD\n", encoding="utf-8")
     _stub_picker(monkeypatch, [s])
@@ -184,6 +177,5 @@ def test_archive_collision_decline_preserves_both(fl_root, monkeypatch):
 
     rc = archive.cmd_archive()
     assert rc == 0
-    # Active session still in place, archived copy untouched.
     assert s.read_text() == "NEW\n"
     assert (fl_root / "archive" / s.name).read_text() == "OLD\n"

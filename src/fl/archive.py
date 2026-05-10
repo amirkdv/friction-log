@@ -52,18 +52,13 @@ def cmd_archive() -> int:
 
 
 def _archive_associated_docs(archived_stems: set[str]) -> int:
-    """Move any active doc that references at least one just-archived session.
-
-    Per the archive contract: a doc follows its sessions, so the first archive
-    of any referenced session pulls the doc along even if other referenced
-    sessions remain active.
-    """
+    """Move any active doc whose source session was just archived."""
     if not archived_stems:
         return 0
     moved = 0
     for doc in storage.list_docs(storage.ROOT):
-        stems = set(storage.read_doc_sessions(doc))
-        if not stems & archived_stems:
+        stem = storage.read_doc_session(doc)
+        if stem is None or stem not in archived_stems:
             continue
         dst = storage.ARCHIVE / doc.name
         try:
