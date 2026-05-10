@@ -49,10 +49,14 @@ if [ $# -eq 0 ]; then
   #   BSD form:  script [opts] file [command...]
   #   GNU form:  script [opts] [-c command] file
   # BSD `script -t N` is a flush-interval, not a timing file, so we omit it on macOS.
+  # Use a login + interactive shell so we pick up the same rc files the user's
+  # terminal does. On macOS, Terminal/iTerm launch login shells by default, and
+  # bash only reads ~/.bash_profile / ~/.profile when invoked as a login shell
+  # (plain `-i` would read ~/.bashrc only). zsh reads ~/.zshrc either way.
   if [ "$(uname)" = "Darwin" ]; then
-    exec script -q "$FL_LOG" "$_user_shell" -i
+    exec script -q "$FL_LOG" "$_user_shell" -il
   else
-    exec script -q -t "$FL_TIMING" -c "$_user_shell -i" "$FL_LOG"
+    exec script -q -t "$FL_TIMING" -c "$_user_shell -il" "$FL_LOG"
   fi
 fi
 
