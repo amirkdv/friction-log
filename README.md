@@ -2,6 +2,12 @@
 
 Record terminal sessions, annotate them inline, and turn a batch into a summary via Claude Code.
 
+:warning: `script` (or alternatives like `tmux`) have a bug on zsh 5.9 that
+makes this idea not viable. Repro: 1. `fl` 2. paste some text, 3. option+left 4.
+backspace. It doesn't erase. This doesn't repro in zsh without `script` or in
+bash with `script`. But bash is less and less viable on macOS so I'll just live
+this idea here as it is, proving a useful concept.
+
 ## Install
 
 ```sh
